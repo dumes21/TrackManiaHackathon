@@ -48,7 +48,11 @@ vision:
   min_component_area_ratio: 0.003
 
   # Pseudo-LIDAR rays in image space.
-  ray_count: 13
+  # 20 rays = the genetic agent's observation size (Agent.py input_size).
+  ray_count: 20
+  # Where the ray fan starts, as a fraction of ROI height (1.0 = bottom).
+  # Lower values lift the origin up the road, off the car body.
+  ray_origin_y: 0.85
   ray_fov_degrees: 110
   ray_length_ratio: 0.80
   ray_step_px: 4
@@ -80,3 +84,19 @@ controller:
   recovery_enabled: true
   recovery_steer: 0.75
   recovery_alternate_seconds: 1.2
+
+# Settings for the genetic-algorithm trainer (Agent.py + TrackmaniaEnv in tm_env.py).
+# The GA evolves steering only; the RuleController above handles throttle/brake.
+evolution:
+  # Reward shaping (per environment step).
+  speed_weight: 0.02        # x speed_kmh   -> reward going fast
+  center_weight: 2.0        # x min(ray)    -> reward staying off the walls
+  forward_weight: 1.0       # x front_clearance -> reward clear road ahead
+  checkpoint_bonus: 50.0    # one-off when a new checkpoint is passed
+  finish_bonus: 500.0       # one-off when the lap finishes
+  crash_penalty: 25.0       # one-off when an episode ends as stuck/off-track
+
+  # Episode termination.
+  max_steps: 600            # hard cap on steps per generation (also in Agent.py)
+  offtrack_confidence_patience: 20  # steps below min_confidence before ending
+  respawn_wait_s: 4.0       # time to wait after respawn for the countdown

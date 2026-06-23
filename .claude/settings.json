@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(.venv/Scripts/python.exe scripts/tas_bruteforce.py --help)",
-      "WebFetch(domain:donadigo.com)"
+      "WebFetch(domain:donadigo.com)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -c \"from Agent import train, GeneticAgent; print\\('import OK, train is', type\\(train\\).__name__\\)\")",
+      "Bash(.venv/Scripts/python.exe scripts/train_evolution.py --help)"
     ]
   }
 }

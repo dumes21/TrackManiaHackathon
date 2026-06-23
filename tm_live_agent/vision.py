@@ -186,7 +186,9 @@ class RoadVision:
             road_center_x = float(np.average(centers, weights=center_weights))
         else:
             road_center_x = w / 2
-        origin = (w // 2, int(0.90 * h))
+        # Ray fan origin. Lower values move it up the image (off the car body).
+        origin_y = float(vcfg.get("ray_origin_y", 0.90))
+        origin = (w // 2, int(np.clip(origin_y, 0.0, 1.0) * h))
         road_center_error = float(np.clip((road_center_x - origin[0]) / max(1, w / 2), -1.0, 1.0))
 
         # Pseudo-LIDAR rays.

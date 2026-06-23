@@ -46,6 +46,18 @@ class _LiveClient(Client):
         print(f"[tm] Registered to server: {iface.server_name}")
 
     def on_run_step(self, iface: TMInterface, _time: int):
+        # Honour a pending respawn request inside the physics callback thread,
+        # where TMInterface calls are valid. give_up() restarts the race.
+        with self.bridge._lock:
+            respawn = self.bridge._respawn_requested
+            if respawn:
+                self.bridge._respawn_requested = False
+                self.bridge._finished = False
+                self.bridge._checkpoint_current = 0
+        if respawn:
+            iface.give_up()
+            return
+
         # Keep inputs neutral during countdown. Telemetry is still useful.
         state = iface.get_simulation_state()
         with self.bridge._lock:
@@ -96,6 +108,7 @@ class TMInterfaceBridge:
         self._checkpoint_current = 0
         self._checkpoint_target = 0
         self._finished = False
+        self._respawn_requested = False
         self._client = _LiveClient(self)
         self._thread = threading.Thread(
             target=self._run_client,
@@ -143,6 +156,17 @@ class TMInterfaceBridge:
     def release(self) -> None:
         self.set_command(ControlCommand())
         self.set_active(False)
+
+    def respawn(self) -> None:
+        """Request a race restart (back to the start line).
+
+        The actual ``give_up()`` call is performed inside the physics callback
+        thread (see _LiveClient.on_run_step), which is the only safe place to
+        issue TMInterface commands.
+        """
+        with self._lock:
+            self._command = ControlCommand()
+            self._respawn_requested = True
 
     def get_telemetry(self) -> Telemetry:
         with self._lock:
