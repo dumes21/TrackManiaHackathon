@@ -55,6 +55,10 @@ vision:
   morph_kernel: 5
   min_component_area_ratio: 0.003
 
+  # Temporal smoothing of decision signals (front clearance, confidence) over N
+  # frames, so one bad frame doesn't make the throttle cut the gas. 1 = off.
+  smooth_frames: 5
+
   # Pseudo-LIDAR rays in image space.
   # 20 rays = the genetic agent's observation size (Agent.py input_size).
   ray_count: 20

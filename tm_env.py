@@ -247,6 +247,7 @@ class TrackmaniaEnv(gym.Env):
 
         self.bridge.release()
         self.rule.reset()
+        self.vision.reset_smoothing()
         self.bridge.respawn()
         self._wait_for_green_light()
 

@@ -228,6 +228,12 @@ class RoadVision:
         front = min(rays, key=lambda r: abs(r.angle_deg))
         front_clearance = float(front.distance_frac)
 
+        # Temporally smooth the throttle/decision signals to kill per-frame flicker.
+        self._fc_hist.append(front_clearance)
+        self._conf_hist.append(confidence)
+        front_clearance = float(np.mean(self._fc_hist))
+        confidence = float(np.mean(self._conf_hist))
+
         target_x = int(np.clip(road_center_x, 0, w - 1))
         target_y = int(0.45 * h)
 
