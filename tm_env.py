@@ -38,11 +38,13 @@ NUM_RAYS = 20
 
 
 class TrackmaniaEnv(gym.Env):
-    def __init__(self, config_path: str = "config/default.yaml", connect_timeout_s: float = 10.0, debug: bool = False):
+    def __init__(self, config_path: str = "config/default.yaml", connect_timeout_s: float = 10.0,
+                 debug: bool = False, training_throttle: bool | None = None):
         super().__init__()
 
         self.cfg = load_config(config_path)
         self.debug = bool(debug)
+        self._training_throttle_override = training_throttle
         self.debug_window = self.cfg.get("runtime", {}).get("debug_window_name", "TMNF Evolution Debug")
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         self.num_rays = NUM_RAYS
@@ -65,6 +67,14 @@ class TrackmaniaEnv(gym.Env):
         self.offtrack_patience = int(evo.get("offtrack_confidence_patience", 20))
         self.respawn_wait_s = float(evo.get("respawn_wait_s", 4.0))
         self.min_confidence = float(self.cfg.get("controller", {}).get("min_confidence", 0.035))
+        # During training, keep the throttle on so the GA can learn steering. The
+        # conservative rule throttle refuses to accelerate on marginal vision and
+        # stalls the car. Set evolution.training_throttle: false to use rule throttle.
+        # A constructor override (e.g. the completion-run script) takes precedence.
+        if self._training_throttle_override is None:
+            self.training_throttle = bool(evo.get("training_throttle", True))
+        else:
+            self.training_throttle = bool(self._training_throttle_override)
 
         # Connect the bridge (input + telemetry).
         self.bridge = TMInterfaceBridge(server_name=runtime.get("server_name", "TMInterface0"))
@@ -95,6 +105,7 @@ class TrackmaniaEnv(gym.Env):
         self._distance_m = 0.0
         self._prev_pos = None
         self._announced_cp = False  # one-time diagnostic when checkpoints first register
+        self._ep_step = 0
 
     def _rays_to_obs(self, vis) -> np.ndarray:
         """Take ray distances as a fixed-length [0,1] observation (clamp/pad to num_rays)."""
@@ -138,7 +149,12 @@ class TrackmaniaEnv(gym.Env):
         # Hybrid: rule controller decides throttle/brake from real telemetry; the
         # genetic policy overrides only the steering.
         cmd, ctrl_dbg = self.rule.compute(self._last_vis, pre_telem, active=racing)
-        cmd = ControlCommand(steer=steer, accelerate=cmd.accelerate, brake=cmd.brake)
+        if self.training_throttle and racing:
+            # Pin the throttle so the car keeps moving and the GA can learn steering.
+            accelerate, brake = True, False
+        else:
+            accelerate, brake = cmd.accelerate, cmd.brake
+        cmd = ControlCommand(steer=steer, accelerate=accelerate, brake=brake)
         self.bridge.set_active(True)
         self.bridge.set_command(cmd)
 
@@ -206,6 +222,14 @@ class TrackmaniaEnv(gym.Env):
                 end_reason = "offtrack"
                 print("🌫️ [OFF-TRACK] lost the road — resetting.")
 
+        self._ep_step += 1
+        if self.debug and self._ep_step % 5 == 0:
+            print(
+                f"[dbg] spd={telem.speed_kmh:5.1f} tgt={ctrl_dbg.target_speed_kmh:5.1f} "
+                f"conf={ctrl_dbg.confidence:.3f} front={ctrl_dbg.front_clearance:.2f} "
+                f"mode={ctrl_dbg.mode} acc={accelerate} brk={brake} steer={steer:+.2f}"
+            )
+
         return obs, reward, done, False, self._build_info(telem, end_reason)
 
     def _build_info(self, telem, end_reason: str) -> dict:
@@ -230,6 +254,7 @@ class TrackmaniaEnv(gym.Env):
         self._low_conf_steps = 0
         self._distance_m = 0.0
         self._prev_pos = None
+        self._ep_step = 0
 
         self.bridge.set_active(True)
         obs, _, _ = self._observe()

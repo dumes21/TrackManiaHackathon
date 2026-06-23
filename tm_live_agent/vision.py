@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from math import cos, radians, sin
 from typing import Any, Dict, List, Tuple
@@ -113,6 +114,16 @@ class RoadVision:
 
     def __init__(self, config: Dict[str, Any]):
         self.cfg = config
+        # Temporal smoothing of the decision signals (front clearance, confidence)
+        # so a single bad frame doesn't make the throttle cut the gas. 1 = off.
+        n = max(1, int(config.get("vision", {}).get("smooth_frames", 5)))
+        self._fc_hist: deque = deque(maxlen=n)
+        self._conf_hist: deque = deque(maxlen=n)
+
+    def reset_smoothing(self) -> None:
+        """Clear the temporal smoothing buffers (call between episodes)."""
+        self._fc_hist.clear()
+        self._conf_hist.clear()
 
     def process(self, frame_bgr: np.ndarray) -> VisionResult:
         vcfg = self.cfg.get("vision", {})
@@ -157,6 +168,18 @@ class RoadVision:
         )
 
         mask = np.where(adaptive | generic, 255, 0).astype(np.uint8)
+
+        # Reject saturated green grass: TMNF road is grey (low saturation, unstable
+        # hue) while grass is green and saturated. Carve green pixels out of the mask.
+        # Hue is OpenCV's 0-179 scale (green ~35-85). Disable via reject_green: false.
+        if bool(vcfg.get("reject_green", True)):
+            green = (
+                (H >= int(vcfg.get("green_hue_lo", 35)))
+                & (H <= int(vcfg.get("green_hue_hi", 95)))
+                & (S >= int(vcfg.get("green_min_saturation", 45)))
+                & (V >= int(vcfg.get("green_min_value", 35)))
+            )
+            mask[green] = 0
 
         k = int(vcfg.get("morph_kernel", 5))
         k = max(1, k if k % 2 == 1 else k + 1)

@@ -43,6 +43,14 @@ vision:
   generic_min_value: 35
   generic_max_value: 245
 
+  # Reject green grass from the road mask (grass is green+saturated, road is grey).
+  # Hue is OpenCV's 0-179 scale. Set reject_green: false to disable.
+  reject_green: true
+  green_hue_lo: 35
+  green_hue_hi: 95
+  green_min_saturation: 45
+  green_min_value: 35
+
   # Clean up mask.
   morph_kernel: 5
   min_component_area_ratio: 0.003
@@ -51,8 +59,10 @@ vision:
   # 20 rays = the genetic agent's observation size (Agent.py input_size).
   ray_count: 20
   # Where the ray fan starts, as a fraction of ROI height (1.0 = bottom).
-  # Lower values lift the origin up the road, off the car body.
-  ray_origin_y: 0.85
+  # Lower values lift the origin up the road, off the car body. Was 0.85, which
+  # put the forward ray ON the car (front_clearance read ~0). 0.70 lifts it onto
+  # the road ahead so front_clearance is meaningful.
+  ray_origin_y: 0.70
   ray_fov_degrees: 110
   ray_length_ratio: 0.80
   ray_step_px: 4
@@ -100,3 +110,8 @@ evolution:
   max_steps: 600            # hard cap on steps per generation (also in Agent.py)
   offtrack_confidence_patience: 20  # steps below min_confidence before ending
   respawn_wait_s: 4.0       # time to wait after respawn for the countdown
+
+  # Throttle during training. true = pin the gas on so the car keeps moving and
+  # the GA can learn steering (recommended for training). false = use the
+  # conservative rule-based throttle (better for a careful finishing run).
+  training_throttle: true
