@@ -31,7 +31,7 @@ from tm_live_agent.window_capture import WindowCapture
 from tm_live_agent.vision import RoadVision
 from tm_live_agent.hotkeys import HotkeyToggle
 
-from debbiesagent import Agent as DebbiesAgent
+from Agent import Agent
 
 OBS_DIM = 83
 WEIGHT_FILE = "weights.pt"
@@ -117,7 +117,7 @@ def main():
     vision = RoadVision(cfg)
     hotkeys = HotkeyToggle(start_key=runtime.get("start_key", "F8"), stop_key=runtime.get("stop_key", "ESC"))
 
-    agent = DebbiesAgent()
+    agent = Agent()
 
     control_hz = float(runtime.get("control_hz", 20))
     dt_target = 1.0 / max(1.0, control_hz)
