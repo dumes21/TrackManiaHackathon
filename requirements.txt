@@ -8,3 +8,8 @@ mss
 pywin32
 PyYAML
 gymnasium
+torch>=2.0
+numpy
+gymnasium
+tmrl
+stable-baselines3[extra]
