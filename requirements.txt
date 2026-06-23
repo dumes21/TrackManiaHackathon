@@ -13,3 +13,5 @@ numpy
 gymnasium
 tmrl
 stable-baselines3[extra]
+torch 
+torchvision
