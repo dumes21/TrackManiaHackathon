@@ -2,6 +2,10 @@
 
 Run this to produce `weights.pt` so `debbiesagent` can load it for smoke tests.
 """
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from model import RaycastPolicy
 import torch
 
