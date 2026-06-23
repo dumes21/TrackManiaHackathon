@@ -1,0 +1,82 @@
+# Main config for the quick-solid v1 unseen-track agent.
+# Target setup:
+# - TMNF launched through TMInterface 1.4.3
+# - Windowed 1280x960
+# - Taskbar auto-hidden
+# - Normal behind-car camera
+
+window:
+  title_substring: "TmForever"
+  # Client-area crop inside the TMNF window, in relative coordinates.
+  # Keep this broad for v1. Vision crops further inside this frame.
+  crop_left: 0.00
+  crop_top: 0.00
+  crop_right: 1.00
+  crop_bottom: 1.00
+
+runtime:
+  server_name: "TMInterface0"
+  control_hz: 20
+  debug: true
+  debug_window_name: "TMNF Live Agent Debug"
+  # F8 toggles active/pause. ESC emergency stops.
+  start_key: "F8"
+  stop_key: "ESC"
+
+vision:
+  # Region of interest inside the game frame.
+  # We ignore most of the sky/HUD and focus on the road ahead.
+  roi_left: 0.06
+  roi_top: 0.28
+  roi_right: 0.94
+  roi_bottom: 0.86
+
+  # Adaptive road mask settings.
+  # The algorithm samples a road-like patch near the bottom-centre of the ROI,
+  # then keeps pixels that look similar, plus generic low-saturation road pixels.
+  seed_x_half_width: 0.12
+  seed_y_top: 0.48
+  seed_y_bottom: 0.68
+  adaptive_sat_tol: 45
+  adaptive_val_tol: 70
+  generic_max_saturation: 70
+  generic_min_value: 35
+  generic_max_value: 245
+
+  # Clean up mask.
+  morph_kernel: 5
+  min_component_area_ratio: 0.003
+
+  # Pseudo-LIDAR rays in image space.
+  ray_count: 13
+  ray_fov_degrees: 110
+  ray_length_ratio: 0.80
+  ray_step_px: 4
+  ray_fail_patience: 3
+
+controller:
+  # Steering
+  steer_kp: 1.15
+  steer_kd: 0.30
+  max_steer: 1.0
+  ray_bias: 0.55
+  center_bias: 0.45
+  steer_deadzone: 0.03
+
+  # Conservative speed control. Tune upward only after it survives.
+  max_speed_kmh: 105
+  corner_speed_kmh: 65
+  unsure_speed_kmh: 35
+  stuck_speed_kmh: 5
+  stuck_after_seconds: 1.6
+
+  # Safety thresholds.
+  min_confidence: 0.035
+  low_front_clearance: 0.32
+  medium_front_clearance: 0.48
+  sharp_turn_abs_steer: 0.52
+
+  # Recovery: no auto-respawn. It tries to reverse/steer out until you intervene.
+  recovery_enabled: true
+  recovery_steer: 0.75
+  recovery_alternate_seconds: 1.2

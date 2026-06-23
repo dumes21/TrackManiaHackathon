@@ -1,0 +1,9 @@
+# TMNF live unseen-track agent dependencies
+# Tested design target: Windows + TrackMania Nations Forever + TMInterface 1.4.3
+
+tminterface
+numpy
+opencv-python
+mss
+pywin32
+PyYAML

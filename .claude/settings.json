@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe scripts/tas_bruteforce.py --help)",
+      "WebFetch(domain:donadigo.com)"
+    ]
+  }
+}
