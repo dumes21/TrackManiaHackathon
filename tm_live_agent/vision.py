@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import cos, radians, sin
-from typing import Any, Dict, List, Tuple
+from math import radians, sin, cos
+from typing import Any, Dict
 
 import cv2
 import numpy as np
@@ -39,45 +39,40 @@ def _rel_box(shape: tuple[int, int], box: tuple[float, float, float, float]) -> 
     return x1, y1, max(x1 + 1, x2), max(y1 + 1, y2)
 
 
-def _largest_seed_connected_component(mask: np.ndarray, seed_rect: tuple[int, int, int, int], min_area: int) -> np.ndarray:
-    """Keep connected components that intersect the seed rectangle.
-
-    If none intersects, fall back to the largest sufficiently large component.
-    """
+def _largest_component(mask: np.ndarray, min_area: int) -> np.ndarray:
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     if num_labels <= 1:
         return np.zeros_like(mask)
 
-    sx1, sy1, sx2, sy2 = seed_rect
-    seed_labels = labels[sy1:sy2, sx1:sx2]
-    label_ids, counts = np.unique(seed_labels[seed_labels > 0], return_counts=True)
-
     keep = np.zeros_like(mask)
-    if len(label_ids) > 0:
-        # Keep the seed-touching component with the most pixels in the seed patch.
-        chosen = int(label_ids[np.argmax(counts)])
-        if stats[chosen, cv2.CC_STAT_AREA] >= min_area:
-            keep[labels == chosen] = 255
-            return keep
+    best_label = -1
+    best_area = 0
 
-    # Fallback: largest non-background component.
-    areas = stats[1:, cv2.CC_STAT_AREA]
-    largest_idx = int(np.argmax(areas)) + 1
-    if stats[largest_idx, cv2.CC_STAT_AREA] >= min_area:
-        keep[labels == largest_idx] = 255
+    for label_id in range(1, num_labels):
+        area = stats[label_id, cv2.CC_STAT_AREA]
+        if area >= min_area and area > best_area:
+            best_area = area
+            best_label = label_id
+
+    if best_label != -1:
+        keep[labels == best_label] = 255
     return keep
 
 
-def _raycast(mask: np.ndarray, origin: tuple[int, int], angle_deg: float, length_px: int, step_px: int, fail_patience: int) -> RayHit:
-    """Cast an image-space pseudo-LIDAR ray.
-
-    Angle 0 points straight up the image. Negative is left, positive is right.
-    """
+def _raycast(
+    mask: np.ndarray,
+    origin: tuple[int, int],
+    angle_deg: float,
+    length_px: int,
+    step_px: int,
+    fail_patience: int,
+) -> RayHit:
     h, w = mask.shape[:2]
     ox, oy = origin
     theta = radians(angle_deg)
     dx = sin(theta)
     dy = -cos(theta)
+
     last_good = (ox, oy)
     consecutive_bad = 0
     travelled = 0
@@ -85,9 +80,11 @@ def _raycast(mask: np.ndarray, origin: tuple[int, int], angle_deg: float, length
     for d in range(0, length_px, max(1, step_px)):
         x = int(round(ox + dx * d))
         y = int(round(oy + dy * d))
+
         if x < 0 or x >= w or y < 0 or y >= h:
             travelled = d
             break
+
         if mask[y, x] > 0:
             last_good = (x, y)
             travelled = d
@@ -99,17 +96,25 @@ def _raycast(mask: np.ndarray, origin: tuple[int, int], angle_deg: float, length
                 break
     else:
         travelled = length_px
-        last_good = (int(round(ox + dx * length_px)), int(round(oy + dy * length_px)))
-        last_good = (int(np.clip(last_good[0], 0, w - 1)), int(np.clip(last_good[1], 0, h - 1)))
+        last_good = (
+            int(round(ox + dx * length_px)),
+            int(round(oy + dy * length_px)),
+        )
 
-    return RayHit(angle_deg=float(angle_deg), distance_frac=float(np.clip(travelled / max(1, length_px), 0, 1)), end_xy=last_good)
+    last_good = (
+        int(np.clip(last_good[0], 0, w - 1)),
+        int(np.clip(last_good[1], 0, h - 1)),
+    )
+
+    return RayHit(
+        angle_deg=float(angle_deg),
+        distance_frac=float(np.clip(travelled / max(1, length_px), 0, 1)),
+        end_xy=last_good,
+    )
 
 
 class RoadVision:
-    """Open-path detector using adaptive road masking and pseudo-LIDAR rays.
-
-    This is deliberately not a CNN. It is fast, explainable, and debuggable.
-    """
+    """Light-grey road detector for Trackmania tm_env."""
 
     def __init__(self, config: Dict[str, Any]):
         self.cfg = config
@@ -117,89 +122,77 @@ class RoadVision:
     def process(self, frame_bgr: np.ndarray) -> VisionResult:
         vcfg = self.cfg.get("vision", {})
         roi_box = (
-            float(vcfg.get("roi_left", 0.06)),
-            float(vcfg.get("roi_top", 0.28)),
-            float(vcfg.get("roi_right", 0.94)),
-            float(vcfg.get("roi_bottom", 0.94)),
+            float(vcfg.get("roi_left", 0.00)),
+            float(vcfg.get("roi_top", 0.18)),
+            float(vcfg.get("roi_right", 1.00)),
+            float(vcfg.get("roi_bottom", 0.92)),
         )
+
         x1, y1, x2, y2 = _rel_box(frame_bgr.shape, roi_box)
         roi = frame_bgr[y1:y2, x1:x2].copy()
         h, w = roi.shape[:2]
 
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        H, S, V = cv2.split(hsv)
+        _, S, V = cv2.split(hsv)
 
-        sx_half = int(float(vcfg.get("seed_x_half_width", 0.12)) * w)
-        sy1 = int(float(vcfg.get("seed_y_top", 0.64)) * h)
-        sy2 = int(float(vcfg.get("seed_y_bottom", 0.88)) * h)
-        sx1 = max(0, w // 2 - sx_half)
-        sx2 = min(w, w // 2 + sx_half)
-        seed_rect = (sx1, sy1, sx2, sy2)
-        seed = hsv[sy1:sy2, sx1:sx2]
+        sat_max = int(vcfg.get("generic_max_saturation", 72))
+        val_min = int(vcfg.get("generic_min_value", 38))
+        val_max = int(vcfg.get("generic_max_value", 250))
 
-        # Estimate local road appearance from seed patch. Ignore extremely dark pixels.
-        seed_flat = seed.reshape(-1, 3)
-        seed_flat = seed_flat[seed_flat[:, 2] > 25]
-        if len(seed_flat) < 20:
-            med_h, med_s, med_v = 0, 40, 100
-        else:
-            med_h, med_s, med_v = np.median(seed_flat, axis=0)
+        mask = ((S <= sat_max) & (V >= val_min) & (V <= val_max))
+        road_mask = np.where(mask, 255, 0).astype(np.uint8)
 
-        sat_tol = float(vcfg.get("adaptive_sat_tol", 55))
-        val_tol = float(vcfg.get("adaptive_val_tol", 75))
-        adaptive = (np.abs(S.astype(np.float32) - med_s) <= sat_tol) & (np.abs(V.astype(np.float32) - med_v) <= val_tol)
-
-        # For grey road surfaces, hue is unstable, so use a generic low-saturation prior.
-        generic = (
-            (S <= int(vcfg.get("generic_max_saturation", 95)))
-            & (V >= int(vcfg.get("generic_min_value", 35)))
-            & (V <= int(vcfg.get("generic_max_value", 245)))
-        )
-
-        mask = np.where(adaptive | generic, 255, 0).astype(np.uint8)
-
-        k = int(vcfg.get("morph_kernel", 5))
+        k = int(vcfg.get("morph_kernel", 7))
         k = max(1, k if k % 2 == 1 else k + 1)
         kernel = np.ones((k, k), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        road_mask = cv2.morphologyEx(road_mask, cv2.MORPH_OPEN, kernel)
+        road_mask = cv2.morphologyEx(road_mask, cv2.MORPH_CLOSE, kernel)
 
-        min_area = int(float(vcfg.get("min_component_area_ratio", 0.003)) * h * w)
-        road_mask = _largest_seed_connected_component(mask, seed_rect, min_area=min_area)
+        min_area = int(float(vcfg.get("min_component_area_ratio", 0.0025)) * h * w)
+        road_mask = _largest_component(road_mask, min_area=min_area)
 
-        # Confidence: fraction of ROI that is connected to the local road seed.
         confidence = float(np.count_nonzero(road_mask) / max(1, h * w))
 
-        # Road centre from lookahead bands. Prefer rows farther ahead but not too near horizon.
-        look_rows = [0.38, 0.48, 0.58, 0.68]
-        weights = [1.35, 1.15, 0.95, 0.75]
-        centers: list[float] = []
-        center_weights: list[float] = []
+        look_rows = [0.42, 0.54, 0.66, 0.78, 0.88]
+        weights = [2.5, 1.5, 1.0, 0.5, 0.2]
+        centers = []
+        center_weights = []
+
+        # --- NEW: Smart Road Clustering ---
         for rel_y, wt in zip(look_rows, weights):
             yy = int(rel_y * h)
             band = road_mask[max(0, yy - 4):min(h, yy + 5), :]
-            xs = np.where(band > 0)[1]
+            col_sums = np.sum(band, axis=0)
+            xs = np.where(col_sums > 0)[0]
+            
             if len(xs) > max(10, 0.02 * w):
-                centers.append(float(np.mean(xs)))
+                # Find gaps in the road (e.g., the hole) that are wider than 8% of the screen
+                gaps = np.diff(xs)
+                gap_indices = np.where(gaps > 0.08 * w)[0]
+                
+                if len(gap_indices) > 0:
+                    # The road is split! Divide xs into separate segments
+                    segments = np.split(xs, gap_indices + 1)
+                    # Pick the widest patch of light grey road
+                    best_segment = max(segments, key=len)
+                    centers.append(float(np.mean(best_segment)))
+                else:
+                    # Normal continuous road
+                    centers.append(float(np.mean(xs)))
                 center_weights.append(float(wt))
-        if centers:
-            road_center_x = float(np.average(centers, weights=center_weights))
-        else:
-            road_center_x = w / 2
-        # Ray fan origin. Lower values move it up the image (off the car body).
-        origin_y = float(vcfg.get("ray_origin_y", 0.90))
-        origin = (w // 2, int(np.clip(origin_y, 0.0, 1.0) * h))
+
+        road_center_x = float(np.average(centers, weights=center_weights)) if centers else w / 2
+        origin = (w // 2, int(float(vcfg.get("ray_origin_y", 0.88)) * h))
         road_center_error = float(np.clip((road_center_x - origin[0]) / max(1, w / 2), -1.0, 1.0))
 
-        # Pseudo-LIDAR rays.
-        ray_count = int(vcfg.get("ray_count", 13))
-        ray_count = max(3, ray_count)
-        fov = float(vcfg.get("ray_fov_degrees", 110))
-        max_len = int(float(vcfg.get("ray_length_ratio", 0.80)) * h)
+        ray_count = max(3, int(vcfg.get("ray_count", 20)))
+        fov = float(vcfg.get("ray_fov_degrees", 200))
+        max_len = int(float(vcfg.get("ray_length_ratio", 0.88)) * h)
         step = int(vcfg.get("ray_step_px", 4))
-        fail_patience = int(vcfg.get("ray_fail_patience", 3))
+        fail_patience = int(vcfg.get("ray_fail_patience", 4))
         angles = np.linspace(-fov / 2.0, fov / 2.0, ray_count)
         rays = [_raycast(road_mask, origin, float(a), max_len, step, fail_patience) for a in angles]
+
         best = max(rays, key=lambda r: r.distance_frac)
         best_ray_error = float(np.clip(best.angle_deg / max(1.0, fov / 2.0), -1.0, 1.0))
         front = min(rays, key=lambda r: abs(r.angle_deg))
@@ -208,7 +201,8 @@ class RoadVision:
         target_x = int(np.clip(road_center_x, 0, w - 1))
         target_y = int(0.45 * h)
 
-        debug = self.draw_debug(roi, road_mask, rays, origin, (target_x, target_y), seed_rect)
+        debug = self.draw_debug(roi, road_mask, rays, origin, (target_x, target_y), road_center_error)
+
         return VisionResult(
             frame_bgr=frame_bgr,
             roi_bgr=roi,
@@ -229,15 +223,16 @@ class RoadVision:
         rays: list[RayHit],
         origin: tuple[int, int],
         target_xy: tuple[int, int],
-        seed_rect: tuple[int, int, int, int],
+        road_center_error: float = 0.0,
     ) -> np.ndarray:
+        h, w = roi.shape[:2]
         overlay = roi.copy()
+
         mask_color = np.zeros_like(overlay)
         mask_color[:, :, 1] = road_mask
         overlay = cv2.addWeighted(overlay, 0.70, mask_color, 0.30, 0)
 
         for r in rays:
-            # Shorter rays are drawn darker red; longer rays greener.
             if r.distance_frac > 0.55:
                 color = (0, 220, 0)
             elif r.distance_frac > 0.32:
@@ -247,9 +242,25 @@ class RoadVision:
             cv2.line(overlay, origin, r.end_xy, color, 2)
             cv2.circle(overlay, r.end_xy, 3, color, -1)
 
+        for yy in range(0, h, 20):
+            cv2.line(overlay, (w // 2, yy), (w // 2, min(h, yy + 10)), (255, 255, 255), 1)
+
+        road_cx = int(np.clip((road_center_error * (w / 2)) + (w / 2), 0, w - 1))
+        cv2.line(overlay, (road_cx, 0), (road_cx, h), (255, 0, 255), 2)
+
+        label_color = (0, 255, 0) if abs(road_center_error) < 0.12 else (0, 0, 255)
+        cv2.putText(
+            overlay,
+            f"err:{road_center_error:+.2f}",
+            (5, 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            label_color,
+            1,
+        )
+
         cv2.circle(overlay, origin, 6, (255, 255, 255), -1)
         cv2.circle(overlay, target_xy, 7, (255, 0, 255), -1)
         cv2.line(overlay, origin, target_xy, (255, 0, 255), 2)
-        sx1, sy1, sx2, sy2 = seed_rect
-        cv2.rectangle(overlay, (sx1, sy1), (sx2, sy2), (255, 255, 0), 2)
+
         return overlay
